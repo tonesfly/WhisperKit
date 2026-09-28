@@ -31,10 +31,24 @@ open class GreedyTokenSampler: TokenSampling {
     public var eotToken: Int
     public var decodingOptions: DecodingOptions
 
-    public init(temperature: FloatType, eotToken: Int, decodingOptions: DecodingOptions) {
+    /// The T>0 top-k draw's source. Seeded, the same logits give the same
+    /// token on every run; the distribution is unchanged (same uniform draw).
+    private var rng: SamplingSeed.Generator?
+
+    /// - Parameter seed: reproducible T>0 draws (TranscribeTask derives it
+    ///   from the window audio + temperature); nil draws from the system RNG.
+    public init(temperature: FloatType, eotToken: Int, decodingOptions: DecodingOptions, seed: UInt64? = nil) {
         self.temperature = temperature
         self.eotToken = eotToken
         self.decodingOptions = decodingOptions
+        self.rng = seed.map(SamplingSeed.Generator.init(seed:))
+    }
+
+    /// A uniform draw in `0..<upperBound` from the seeded generator when set.
+    func uniform(_ upperBound: Float) -> Float {
+        guard upperBound > 0 else { return 0 }
+        if rng != nil { return Float.random(in: 0..<upperBound, using: &rng!) }
+        return Float.random(in: 0..<upperBound)
     }
 
     #if canImport(CoreML.MLState)
@@ -58,7 +72,7 @@ open class GreedyTokenSampler: TokenSampling {
             // top-k multinomial sampling
             let (topKProbs, topKIndices) = softmaxScores.topK(decodingOptions.topK)
 
-            let rnd = topKProbs.sum() * Float.random(in: 0..<1)
+            let rnd = topKProbs.sum() * uniform(1)
             var accumTopKProbs = topKProbs.cumulativeSum(alongAxis: -1)
             accumTopKProbs += (accumTopKProbs .< rnd) * 100.0
             let topKIndex = accumTopKProbs.argsort()[..., 0]
@@ -166,7 +180,7 @@ open class GreedyTokenSampler: TokenSampling {
 
                 // multinomial sample from top-k
                 let sumOfbestIndicesResult = bestValuesResult.reduce(0, +)
-                let rnd = Float.random(in: 0..<sumOfbestIndicesResult)
+                let rnd = uniform(sumOfbestIndicesResult)
                 var accumulator = Float(0.0)
                 var chosenIndex = 0
                 for i in 0..<bestValuesResult.count {

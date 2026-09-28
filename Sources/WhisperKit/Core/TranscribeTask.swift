@@ -133,6 +133,7 @@ open class TranscribeTask {
 
                 let audioProcessingStart = Date()
                 let clipAudioSamples = Array(audioArray[seek..<(seek + segmentSize)])
+                let windowSeed = SamplingSeed.window(clipAudioSamples)
                 guard let audioSamples = audioProcessor.padOrTrim(fromArray: clipAudioSamples, startAt: 0, toLength: windowSamples) else {
                     throw WhisperError.transcriptionFailed("Audio samples are nil")
                 }
@@ -172,7 +173,7 @@ open class TranscribeTask {
 
                 try Task.checkCancellation()
                 // Send to decoder to predict text tokens with fallback
-                let decodingResult = try await decodeWithFallback(encoderSegment: encoderOutput, decodingOptions: options, callback: decodingCallback)
+                let decodingResult = try await decodeWithFallback(encoderSegment: encoderOutput, decodingOptions: options, windowSeed: windowSeed, callback: decodingCallback)
 
                 // MARK: Windowing
 
@@ -289,6 +290,7 @@ open class TranscribeTask {
         func decodeWithFallback(
             encoderSegment encoderOutput: any AudioEncoderOutputType,
             decodingOptions options: DecodingOptions,
+            windowSeed: UInt64,
             callback: TranscriptionCallback = nil
         ) async throws -> DecodingResult {
             let interval = Logging.beginSignpost("Decode", signposter: Logging.TranscribeTask.signposter)
@@ -305,7 +307,9 @@ open class TranscribeTask {
                 Logging.info("Decoding Temperature: \(temp)")
                 let decodeWithFallbackStart = Date()
 
-                let tokenSampler = GreedyTokenSampler(temperature: temp, eotToken: tokenizer.specialTokens.endToken, decodingOptions: options)
+                let tokenSampler = GreedyTokenSampler(
+                    temperature: temp, eotToken: tokenizer.specialTokens.endToken, decodingOptions: options,
+                    seed: SamplingSeed.attempt(window: windowSeed, temperature: Float(temp)))
 
                 var currentDecodingOptions = options
                 // For a multilingual model, if language is not passed and detectLanguage is true, detect language and set in options
